@@ -96,8 +96,8 @@ import os
 import csv
 import shutil
 
-data_path = "../../data/ddi_data/"
-dataset_name = "ChChMiner/"
+data_path = "../../data/synergy_data/"
+dataset_name = "QA_comp/"
 
 if os.path.exists(data_path + dataset_name):
     shutil.rmtree(data_path + dataset_name)
@@ -108,28 +108,31 @@ empty_graph = Data(
     edge_attr=torch.empty(0, 0)  # 没有边特征
 )
 
-def calculate_bounds(number):
-    lower_bound = math.floor(number * 2) / 2  # 下界
-    upper_bound = math.ceil(number * 2) / 2   # 上界
-    return lower_bound, upper_bound
+pattern_drug1 = r"\[#Drug1\]\s*The SMILES of the drug is\s*(.*?)\."
+pattern_drug2 = r"\[#Drug2\]\s*The SMILES of the drug is\s*(.*?)\."
 
 def process(data, dir):
     i = 0
     for j in range(len(data)):
+        drug1_match = re.search(pattern_drug1, data[j][0])
+        drug2_match = re.search(pattern_drug2, data[j][0])
+
+        smiles1 = drug1_match.group(1) if drug1_match else None
+        smiles2 = drug2_match.group(1) if drug2_match else None
         try:
-            graph1 = mol_to_graph_data_obj_simple(data[j][2])
-            data1 = {"Valid": True, "Graph": graph1, "Drug": data[j][0]}
+            graph1 = mol_to_graph_data_obj_simple(smiles1)
+            data1 = {"Valid": False, "Graph": graph1}
         except Exception as e:
-            print(f"Error occurred while processing {data[j][2]}:")
+            print(f"Error occurred while processing {smiles1}:")
             print(str(e))
-            data1 = {"Valid": False, "Graph": empty_graph, "Drug": data[j][0]}
+            data1 = {"Valid": False, "Graph": empty_graph,}
         try:
-            graph2 = mol_to_graph_data_obj_simple(data[j][3])
-            data2 = {"Valid": True, "Graph": graph2, "Drug": data[j][2]}
+            graph2 = mol_to_graph_data_obj_simple(smiles2)
+            data2 = {"Valid": False, "Graph": graph2}
         except Exception as e:
-            print(f"Error occurred while processing {data[j][3]}:")
+            print(f"Error occurred while processing {smiles2}:")
             print(str(e))
-            data2 = {"Valid": False, "Graph": empty_graph, "Drug": data[j][2]}
+            data2 = {"Valid": False, "Graph": empty_graph}
         os.makedirs(data_path + dataset_name + dir + "/graph1/" + str(i))
         torch.save(data1, data_path + dataset_name + dir + "/graph1/" + str(i) + '/graph_data.pt')
         os.makedirs(data_path + dataset_name + dir + "/graph2/" + str(i))
@@ -141,58 +144,58 @@ def process(data, dir):
         os.makedirs(data_path + dataset_name + dir + "/text/" + str(i))
         print(i)
         file = open(data_path + dataset_name + dir + "/text/" + str(i) + "/text.txt","w")
-        value = data[j][4]
-        if value > 0:
-            text = 'Yes.' 
-        else:
-            text = 'No.'
+        text = data[j][1]
         file.write(text)
         file.close()
-        smiles1 = data[j][2]
-        smiles2 = data[j][3]
         file = open(data_path + dataset_name + dir + "/smiles1/" + str(i) + "/text.txt","w")
         if pd.notna(smiles1) and smiles1 != "Not Available":
-            if not data1["Valid"]:
-                print("ERROR!")
-                print(smiles1)
-                print(data[j][0]) 
-                break
+        #     if not data1["Valid"]:
+        #         print("ERROR!")
+        #         print(smiles1)
+        #         print(data[j][0]) 
+        #         break
             file.write(smiles1)
         else:
             file.write("None")
         file.close()
         file = open(data_path + dataset_name + dir + "/smiles2/" + str(i) + "/text.txt","w")
         if pd.notna(smiles2) and smiles2 != "Not Available":
-            if not data2["Valid"]:
-                print("ERROR!")
-                print(smiles2)
-                print(data[j][2]) 
-                break
+        #     if not data2["Valid"]:
+        #         print("ERROR!")
+        #         print(smiles2)
+        #         print(data[j][2]) 
+        #         break
             file.write(smiles2)
         else:
             file.write("None")
         file.close()
+        cleaned = re.sub(r"<.*?>", "", data[j][0], flags=re.DOTALL)
+        part1 = cleaned.split("[#Drug2]")[0]
+        property1 = re.sub(pattern_drug1, "", part1, flags=re.DOTALL).strip()
         file = open(data_path + dataset_name + dir + "/property1/" + str(i) + "/text.txt","w")
-        property1 = ""
         file.write(property1)   
         file.close()
+        if "[#Drug2]" in cleaned and "Question:" in cleaned:
+            part2 = "[#Drug2]" + cleaned.split("[#Drug2]", 1)[1].split("Question:", 1)[0]
+            property2 = re.sub(pattern_drug2, "", part2, flags=re.DOTALL).strip()
+        else:
+            property2 = ""
         file = open(data_path + dataset_name + dir + "/property2/" + str(i) + "/text.txt","w")
-        property2 = ""
         file.write(property2)
         file.close()
         i += 1
 
-train_data = pd.read_csv(data_path + 'ChChMiner.csv')
+train_data = pd.read_csv(data_path + 'QA/train_comp.csv')
 train_data = np.array(train_data)
 
 process(train_data, "train")
 
-valid_data = pd.read_csv(data_path + 'test.csv')
+valid_data = pd.read_csv(data_path + 'QA/val_comp.csv')
 valid_data = np.array(valid_data)
 
 process(valid_data, "valid")
 
-test_data = pd.read_csv(data_path + 'test.csv')
+test_data = pd.read_csv(data_path + 'QA/test_comp.csv')
 test_data = np.array(test_data)
 
 process(test_data, "test")

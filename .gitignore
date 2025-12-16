@@ -6,6 +6,12 @@ all_checkpoints/*
 modelscope/*
 gin_pretrained
 bert_pretrained
+cancer_outputs
+cancer
+build
+both
+backend
+.gradio
 data/*
 dicts/*
 autogllight.egg-info

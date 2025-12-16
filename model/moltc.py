@@ -52,24 +52,92 @@ class MolTC(pl.LightningModule):
         self.previous_unchanged_keys = None
         if args.opt_model.find('galactica') >= 0:
             self.blip2opt = Blip2OPT(args.bert_name, args.gin_num_layers, args.gin_hidden_dim, args.drop_ratio, args.tune_gnn, args.num_query_token, args.cross_attention_freq, args.llm_tune, args.peft_dir, args.opt_model, args.prompt, use_nas=args.NAS, args=args)
+            self.tokenizer = self.blip2opt.opt_tokenizer
         else:
             self.blip2opt = Blip2Llama(args.bert_name, args.gin_num_layers, args.gin_hidden_dim, args.drop_ratio, args.tune_gnn, args.num_query_token, args.cross_attention_freq, args.llm_tune == 'lora', args.peft_dir, args.opt_model, args.prompt, use_nas=args.NAS, args=args)
-        self.tokenizer = self.blip2opt.init_tokenizer()
+            self.tokenizer = self.blip2opt.llm_tokenizer
         self.save_hyperparameters(args)
     
     def configure_optimizers(self):
         self.trainer.reset_train_dataloader()
-        warmup_steps = min(len(self.trainer.train_dataloader), self.args.warmup_steps)
-        optimizer = optim.AdamW(self.parameters(), lr=self.args.init_lr, weight_decay=self.args.weight_decay)
-        if self.args.scheduler == 'linear_warmup_cosine_lr':
-            self.scheduler = LinearWarmupCosineLRScheduler(optimizer, self.args.max_epochs, self.args.min_lr, self.args.init_lr, warmup_steps, self.args.warmup_lr)
-        elif self.args.scheduler == 'linear_warmup_step_lr':
-            self.scheduler = LinearWarmupStepLRScheduler(optimizer, self.args.max_epochs, self.args.min_lr, self.args.init_lr, self.args.lr_decay_rate, self.args.warmup_lr, warmup_steps)
-        elif self.args.scheduler == 'None':
-            self.scheduler = None
+        if self.args.NAS and self.args.cell:
+            encoder_params = []
+            ag_params = []
+            params = []
+
+            for name, param in self.named_parameters():
+                if param.requires_grad:
+                    if "graph_encoder" in name and "encoder" in name:
+                        encoder_params.append(param)
+                    elif "graph_encoder" in name and "ag" in name:
+                        ag_params.append(param)
+                    else:
+                        params.append(param)
+
+            optimizer = torch.optim.AdamW([
+                {"params": params, "lr": self.args.init_lr, "weight_decay": self.args.weight_decay},
+                {"params": encoder_params, "lr": self.args.encoder_learning_rate, "weight_decay": self.args.encoder_weight_decay},
+                {"params": ag_params, "lr": self.args.arch_learning_rate, "weight_decay": self.args.arch_weight_decay},
+            ])
+
+            warmup_steps = min(len(self.trainer.train_dataloader), self.args.warmup_steps)
+            self.scheduler = LinearWarmupCosineLRScheduler(
+                optimizer,
+                self.args.max_epochs, 
+                self.args.min_lr, 
+                self.args.init_lr, 
+                warmup_steps, 
+                self.args.warmup_lr
+            )
+
+            return optimizer
+        elif self.args.NAS:
+            encoder_params = []
+            ag_params = []
+            params = []
+
+            for name, param in self.named_parameters():
+                if param.requires_grad:
+                    if "graph_encoder" in name and "supernet0" in name:
+                        encoder_params.append(param)
+                    elif "graph_encoder" in name and "ag" in name:
+                        ag_params.append(param)
+                    else:
+                        params.append(param)
+
+            optimizer = torch.optim.AdamW([
+                {"params": params, "lr": self.args.init_lr, "weight_decay": self.args.weight_decay},
+                {"params": encoder_params, "lr": self.args.encoder_learning_rate, "weight_decay": self.args.encoder_weight_decay},
+                {"params": ag_params, "lr": self.args.arch_learning_rate, "weight_decay": self.args.arch_weight_decay},
+            ])
+
+            warmup_steps = min(len(self.trainer.train_dataloader), self.args.warmup_steps)
+            self.scheduler = LinearWarmupCosineLRScheduler(
+                optimizer,
+                self.args.max_epochs, 
+                self.args.min_lr, 
+                self.args.init_lr, 
+                warmup_steps, 
+                self.args.warmup_lr
+            )
+
+            return optimizer
         else:
-            raise NotImplementedError()
-        return optimizer
+            warmup_steps = min(len(self.trainer.train_dataloader), self.args.warmup_steps)
+            optimizer = torch.optim.AdamW(
+                self.parameters(), 
+                self.args.init_lr, 
+                weight_decay=self.args.weight_decay
+            )
+            self.scheduler = LinearWarmupCosineLRScheduler(
+                optimizer, 
+                self.args.max_epochs, 
+                self.args.min_lr, 
+                self.args.init_lr, 
+                warmup_steps, 
+                self.args.warmup_lr
+            )
+            return optimizer
 
     def test_epoch_end(self, outputs):
         list_predictions, list_targets = zip(*outputs)
@@ -103,20 +171,104 @@ class MolTC(pl.LightningModule):
 
     @torch.no_grad()
     def test_step(self, batch, batch_idx):
-        graphs1, graphs2, prompt_tokens, texts = batch
-        samples = {'graphs1': graphs1, 'graphs2': graphs2,'prompt_tokens': prompt_tokens}
-        predictions = self.blip2opt.generate(
-            samples, 
-            do_sample=self.do_sample,
-            num_beams=self.num_beams,
-            max_length=self.max_len,
-            min_length=self.min_len
-        )
-        return predictions, texts
+        if self.args.cell and self.args.NAS:
+            graphs1, graphs2, target1, target2, genes, prompt_tokens, texts = batch
+            samples = {'graphs1': graphs1, 'graphs2': graphs2, 'target1': target1, 'target2': target2, 'genes': genes, 'prompt_tokens': prompt_tokens}
+            predictions = self.blip2opt.generate(
+                samples, 
+                do_sample=self.do_sample,
+                num_beams=self.num_beams,
+                max_length=self.max_len,
+                min_length=self.min_len,
+                output_scores=True
+            )
+            max_probs, max_indices = torch.nn.functional.softmax(predictions["scores"][0], dim=-1).max(dim=-1)
+            max_probs, max_indices = max_probs[::self.num_beams], max_indices[::self.num_beams]
+
+            decoded_tokens = self.tokenizer.batch_decode(max_indices.unsqueeze(-1))
+
+            predictions = [(token, prob) for token, prob in zip(decoded_tokens, max_probs.tolist())]
+            outputs = self.blip2opt.generate(
+                samples, 
+                do_sample=self.do_sample,
+                num_beams=self.num_beams,
+                max_length=self.max_len,
+                min_length=self.min_len,
+            )
+            predictions = [(token, prob, output) for (token, prob), output in zip(predictions, outputs)]
+            return predictions, texts
+        elif self.args.cell == True:
+            graphs1, graphs2, genes, prompt_tokens, texts = batch
+            samples = {'graphs1': graphs1, 'graphs2': graphs2, 'genes': genes, 'prompt_tokens': prompt_tokens}
+            predictions = self.blip2opt.generate(
+                samples, 
+                do_sample=self.do_sample,
+                num_beams=self.num_beams,
+                max_length=self.max_len,
+                min_length=self.min_len,
+                output_scores=True
+            )
+            max_probs, max_indices = torch.nn.functional.softmax(predictions["scores"][0], dim=-1).max(dim=-1)
+            max_probs, max_indices = max_probs[::self.num_beams], max_indices[::self.num_beams]
+
+            decoded_tokens = self.tokenizer.batch_decode(max_indices.unsqueeze(-1))
+
+            predictions = [(token, prob) for token, prob in zip(decoded_tokens, max_probs.tolist())]
+            outputs = self.blip2opt.generate(
+                samples, 
+                do_sample=self.do_sample,
+                num_beams=self.num_beams,
+                max_length=self.max_len,
+                min_length=self.min_len,
+            )
+            predictions = [(token, prob, output) for (token, prob), output in zip(predictions, outputs)]
+            return predictions, texts
+        else:
+            if (self.current_epoch+1) % self.caption_eval_epoch != 0:
+                return 
+            graphs1, graphs2, prompt_tokens, texts = batch
+            samples = {'graphs1': graphs1, 'graphs2': graphs2,'prompt_tokens': prompt_tokens}
+            predictions = self.blip2opt.generate(
+                samples, 
+                do_sample=self.do_sample,
+                num_beams=self.num_beams,
+                max_length=self.max_len,
+                min_length=self.min_len
+            )
+            return predictions, texts
     
     @torch.no_grad()
     def validation_step(self, batch, batch_idx, dataloader_idx):
-        if self.args.cell == True:
+        if self.args.cell and self.args.NAS:
+            if (self.current_epoch+1) % self.caption_eval_epoch != 0:
+                return 
+            
+            graphs1, graphs2, target1, target2, genes, prompt_tokens, texts = batch
+            samples = {'graphs1': graphs1, 'graphs2': graphs2, 'target1': target1, 'target2': target2, 'genes': genes, 'prompt_tokens': prompt_tokens}
+            predictions = self.blip2opt.generate(
+                samples, 
+                do_sample=self.do_sample,
+                num_beams=self.num_beams,
+                max_length=self.max_len,
+                min_length=self.min_len,
+                output_scores=True
+            )
+            max_probs, max_indices = torch.nn.functional.softmax(predictions["scores"][0], dim=-1).max(dim=-1)
+            max_probs, max_indices = max_probs[::self.num_beams], max_indices[::self.num_beams]
+
+            decoded_tokens = self.tokenizer.batch_decode(max_indices.unsqueeze(-1))
+
+            predictions = [(token, prob) for token, prob in zip(decoded_tokens, max_probs.tolist())]
+            outputs = self.blip2opt.generate(
+                samples, 
+                do_sample=self.do_sample,
+                num_beams=self.num_beams,
+                max_length=self.max_len,
+                min_length=self.min_len,
+            )
+            predictions = [(token, prob, output) for (token, prob), output in zip(predictions, outputs)]
+            return predictions, texts
+        elif self.args.cell == True:
             if (self.current_epoch+1) % self.caption_eval_epoch != 0:
                 return 
             graphs1, graphs2, genes, prompt_tokens, texts = batch
@@ -126,10 +278,26 @@ class MolTC(pl.LightningModule):
                 do_sample=self.do_sample,
                 num_beams=self.num_beams,
                 max_length=self.max_len,
-                min_length=self.min_len
+                min_length=self.min_len,
+                output_scores=True
             )
+
+            max_probs, max_indices = torch.nn.functional.softmax(predictions["scores"][0], dim=-1).max(dim=-1)
+            max_probs, max_indices = max_probs[::self.num_beams], max_indices[::self.num_beams]
+
+            decoded_tokens = self.tokenizer.batch_decode(max_indices.unsqueeze(-1))
+
+            predictions = [(token, prob) for token, prob in zip(decoded_tokens, max_probs.tolist())]
+            outputs = self.blip2opt.generate(
+                samples, 
+                do_sample=self.do_sample,
+                num_beams=self.num_beams,
+                max_length=self.max_len,
+                min_length=self.min_len,
+            )
+            predictions = [(token, prob, output) for (token, prob), output in zip(predictions, outputs)]
             return predictions, texts
-        if self.args.DDI == True or self.args.double == True or self.args.SSI == True or self.args.cancer == True:
+        elif self.args.DDI == True or self.args.double == True or self.args.SSI == True or self.args.cancer == True:
             if (self.current_epoch+1) % self.caption_eval_epoch != 0:
                 return 
             graphs1, graphs2, prompt_tokens, texts = batch

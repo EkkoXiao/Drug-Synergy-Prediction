@@ -101,7 +101,7 @@ import csv
 import shutil
 
 data_path = "../../data/synergy_data/"
-dataset_name = "SynergyBaseline/"
+dataset_name = "SynergyCancerCombs/"
 
 if os.path.exists(data_path + dataset_name):
     shutil.rmtree(data_path + dataset_name)
@@ -119,14 +119,12 @@ def process(data, dir):
     for j in range(len(data)):
         smiles1 = data[j][4].split(";")[1] if (";" in data[j][4]) else data[j][4]
         smiles2 = data[j][5].split(";")[1] if (";" in data[j][5]) else data[j][5]
-        flag = True
         try:
             graph1 = mol_to_graph_data_obj_simple(smiles1)
             data1 = {"Valid": True, "Graph": graph1, "Drug": data[j][0]}
         except Exception as e:
             print(f"Error occurred while processing {data[j][0]}:")
             print(str(e))
-            flag = False
             data1 = {"Valid": False, "Graph": empty_graph, "Drug": data[j][0]}
         try:
             graph2 = mol_to_graph_data_obj_simple(smiles2)
@@ -134,10 +132,7 @@ def process(data, dir):
         except Exception as e:
             print(f"Error occurred while processing {data[j][1]}:")
             print(str(e))
-            flag = False
             data2 = {"Valid": False, "Graph": empty_graph, "Drug": data[j][1]}
-        if not flag:
-            continue
         os.makedirs(data_path + dataset_name + dir + "/graph1/" + str(i))
         torch.save(data1, data_path + dataset_name + dir + "/graph1/" + str(i) + '/graph_data.pt')
         os.makedirs(data_path + dataset_name + dir + "/graph2/" + str(i))
@@ -157,8 +152,10 @@ def process(data, dir):
         upper, lower = calculate_bounds(value)
         if value > 0:
             text = "Yes. And the absolute value is above "+ str(abs(lower))+" and below "+ str(abs(upper))+", thus the accurate value is "+ str('%.2f'%(abs(value))) + "."
+            # text = "The value is above "+ str(lower) + " and below " + str(upper) +", thus the accurate value is "+ str('%.2f'%(value)) + "."
         else:
             text = "No. And the absolute value is above "+ str(abs(lower))+" and below "+ str(abs(upper))+", thus the accurate value is "+ str('%.2f'%(abs(value))) + "."
+            # text = "The value is above "+ str(lower)+" and below "+ str(upper)+", thus the accurate value is "+ str('%.2f'%(value)) + "."
         file.write(text)
         file.close()
         file = open(data_path + dataset_name + dir + "/smiles1/" + str(i) + "/text.txt","w")
@@ -184,26 +181,26 @@ def process(data, dir):
             file.write("None")
         file.close()
         file = open(data_path + dataset_name + dir + "/property1/" + str(i) + "/text.txt","w")
-        property1 = "#Drug1 is " + data[j][0]
+        property1 = "#Drug1 is " + data[j][0] + "."
         file.write(property1)
         file.close()
         file = open(data_path + dataset_name + dir + "/property2/" + str(i) + "/text.txt","w")
-        property2 = "#Drug2 is " + data[j][2]
+        property2 = "#Drug2 is " + data[j][2] + "."
         file.write(property2)
         file.close()
         i += 1
 
-train_data = pd.read_csv(data_path + 'drugcomb_bliss_thresh_1.csv')
+train_data = pd.read_csv(data_path + 'new_combs.csv')
 train_data = np.array(train_data)
 
 process(train_data, "train")
 
-valid_data = pd.read_csv(data_path + 'validation_fold0.csv')
+valid_data = pd.read_csv(data_path + 'new_combs.csv')
 valid_data = np.array(valid_data)
 
 process(valid_data, "valid")
 
-test_data = pd.read_csv(data_path + 'test_fold0.csv')
+test_data = pd.read_csv(data_path + 'new_combs.csv')
 test_data = np.array(test_data)
 
 process(test_data, "test")

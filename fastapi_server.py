@@ -1,5 +1,13 @@
 import argparse
+import warnings
+import os
+
+warnings.simplefilter("ignore", UserWarning)
+warnings.simplefilter("ignore", FutureWarning)
+os.environ["TOKENIZERS_PARALLELISM"] = "false" 
+
 from collections import defaultdict
+from itertools import combinations
 import json
 import re
 from fastapi import FastAPI, HTTPException
@@ -15,8 +23,24 @@ import uvicorn
 # import functions
 app = FastAPI()
 
-with open("cancer_targets.json", "r", encoding="utf-8") as f:
+with open("backend/database/cancer_targets.json", "r", encoding="utf-8") as f:
     CANCER_TARGETS = json.load(f)
+
+with open("backend/database/cancer_cell_line.json", "r", encoding="utf-8") as f:
+    CANCER_CELL_LINES = json.load(f)
+
+df = pd.read_csv("backend/database/tested_drugs.csv")
+TESTED_DRUGS = {}
+
+for _, row in df.iterrows():
+    drug = row['drug']
+    if pd.notna(row['drug_row_group_cat']):
+        label = int(row['drug_row_group_cat'])
+    elif pd.notna(row['drug_col_group_cat']):
+        label = int(row['drug_col_group_cat'])
+    else:
+        label = 2  # 默认 Experimental / Investigational
+    TESTED_DRUGS[drug] = label
 
 # MODEL = "deepseek-r1:70b"
 MODEL = "qwen2.5:0.5b"
@@ -27,8 +51,11 @@ def get_args():
     parser.add_argument('--prompt', type=str, default='[START_SMILES]{}[END_SMILES]')
     parser.add_argument('--cancer', type=bool, default=True)
     parser.add_argument('--NAS', type=bool, default=False)
+    parser.add_argument('--cell', type=bool, default=False)
+    parser.add_argument('--string', type=bool, default=False)
     parser.add_argument('--category', type=int, default=203)
     parser.add_argument('--device', type=int, default=6)
+    parser.add_argument('--llm_device', type=int, default=0)
     args = parser.parse_args()
     args.tune_gnn = True
     args.llm_tune = "lora"
@@ -37,20 +64,24 @@ def get_args():
 args = get_args()
 device = f"cuda:{args.device}"
 
-desc_model = MolTC(args)
-ckpt = torch.load("all_checkpoints/ft_drugbankCancer_galactica_category_all/last.ckpt", map_location=device)
-desc_model.load_state_dict(ckpt['state_dict'], strict=False)
+# 暂时不启用 DDI 模型
+# desc_model = MolTC(args)
+# ckpt = torch.load("./all_checkpoints/ft_drugbankCancer_galactica_category_all/last.ckpt", map_location=device)
+# desc_model.load_state_dict(ckpt['state_dict'], strict=False)
 
-args.category = -1
+# args.category = -1
 
-severity_model = MolTC(args)
-ckpt = torch.load("all_checkpoints/ft_drugbankCancer_galactica_severity_all/last.ckpt", map_location=device)
-severity_model.load_state_dict(ckpt['state_dict'], strict=False)
+# severity_model = MolTC(args)
+# ckpt = torch.load("./all_checkpoints/ft_drugbankCancer_galactica_severity_all/last.ckpt", map_location=device)
+# severity_model.load_state_dict(ckpt['state_dict'], strict=False)
 
-device = f"cuda:{args.device}"
+# device = f"cuda:{args.device}"
 
-desc_model.to(device)
-severity_model.to(device)
+# desc_model.to(device)
+# severity_model.to(device)
+
+desc_model = None
+severity_model = None
 
 dict_path = "./cancer/"
 category_df = pd.read_csv(dict_path + 'category_dict.csv')
@@ -67,7 +98,7 @@ drug_dict_property = dict(zip(cancer_drug['DrugBank ID'], cancer_drug['descripti
 target_df = pd.read_excel(dict_path + "targetDrugbank.xlsx")
 target_dict = target_df.groupby(target_df.columns[1])[target_df.columns[2]].agg(list).to_dict()
 
-drug_target_df = pd.read_csv("drug_target_relations_with_atc.csv")
+drug_target_df = pd.read_csv("backend/database/drug_target_relations_with_atc.csv")
 
 class Drug(BaseModel):
     name: str
@@ -90,9 +121,15 @@ class Target(BaseModel):
     uniprotId: str
     score: float
 
-class ComboRequest(BaseModel):
+class ComboRequestDeprecated(BaseModel):
     targets: list[Target]
     count: int = 2
+
+class ComboRequest(BaseModel):
+    cell_line: str
+    count: int = Field(default=2, ge=2, le=4)
+    label: int = Field(default=1, ge=0, le=4) # label 为组合中药物是 Approved 的数量，不超过 count    
+    topk: int = Field(default=10, ge=1, le=1000) # 返回 topk 个组合
 
 @app.get("/info")
 def get_drug_info(request: DrugInfoRequest):
@@ -159,7 +196,6 @@ def drug_interaction(request: DrugInteractRequest):
         interaction_dict_drugname[new_key] = value
 
     return {"interactions": interaction_dict_drugname}
-
 
 @app.post("/generate")
 def generate_text(request: TextRequest):
@@ -252,8 +288,16 @@ def get_cancer_targets(cancer_type: str):
         raise HTTPException(status_code=404, detail="未知癌症类型")
     return {"targets": targets}
 
-@app.post("/recommend_combo")
-def recommend_combo(req: ComboRequest):
+@app.get("/cancer_cell_line")
+def get_cancer_cell_line(cancer_type: str):
+    """返回指定癌症的细胞系清单"""
+    cell_lines = CANCER_CELL_LINES.get(cancer_type)
+    if cell_lines is None:
+        raise HTTPException(status_code=404, detail="未知癌症类型")
+    return {"cell_lines": cell_lines}
+
+@app.post("/recommend_combo_deprecated")
+def recommend_combo_deprecated(req: ComboRequestDeprecated):
     targets = req.targets
     k = max(2, min(req.count, 4))
     if len(targets) == 0:
@@ -360,6 +404,58 @@ def recommend_combo(req: ComboRequest):
         combo["explanation"] = explanation
 
     return {"combos": top_combos}
+
+
+@app.post("/recommend_combo")
+def recommend_combo(req: ComboRequest):
+    # 根据 cell_line 构造文件路径
+    csv_file = f"backend/database/result_{req.cell_line}.csv"
+    if not os.path.exists(csv_file):
+        raise HTTPException(status_code=404, detail=f"未找到细胞系 {req.cell_line} 相关数据")
+    df = pd.read_csv(csv_file)  
+
+    all_drugs = list(TESTED_DRUGS.keys())
+    approved= [d for d in all_drugs if TESTED_DRUGS[d] == 1]
+    investigational = [d for d in all_drugs if TESTED_DRUGS[d] != 1]
+
+    combos = []
+
+    # 遍历所有 approved 药物的组合
+    for approved_subset in combinations(approved, req.label):
+        remaining_needed = req.count - req.label
+        # 遍历 investigational 药物组合
+        for investigational_subset in combinations(investigational, remaining_needed):
+            combo = list(approved_subset) + list(investigational_subset)
+            combos.append(combo)
+
+    score_lookup = {}
+    for _, row in df.iterrows():
+        pair1 = (row['drug_row'], row['drug_col'])
+        pair2 = (row['drug_col'], row['drug_row'])
+        score_lookup[pair1] = row['score']
+        score_lookup[pair2] = row['score']
+
+    combo_scores = []
+
+    for combo in combos:
+        pair_scores = []
+        # 遍历所有两两组合
+        for drug1, drug2 in combinations(combo, 2):
+            score = score_lookup.get((drug1, drug2))
+            if score is not None:
+                pair_scores.append(score)
+            else:
+                # 如果没有找到对应分数，可以选择跳过或报错，这里跳过
+                continue
+        # 计算平均分
+        avg_score = sum(pair_scores) / len(pair_scores) if pair_scores else None
+        combo_scores.append({'combo': combo, 'score': avg_score})
+
+    # 选择分数最高的前 N 个组合
+    top_combos = sorted(combo_scores, key=lambda x: x['score'] if x['score'] is not None else float('-inf'), reverse=True)[:req.topk]
+
+    return {"combos": top_combos}
+
 
 if __name__ == "__main__":
     uvicorn.run("fastapi_server:app", host="0.0.0.0", port=8000, reload=True)

@@ -1,3 +1,4 @@
+import copy
 import math
 import os
 import re
@@ -15,6 +16,8 @@ from torch.utils.data import Dataset
 from torch_geometric.data import Data, InMemoryDataset
 from torch_geometric.loader.dataloader import Collater
 from itertools import repeat, chain
+from transformers import AutoTokenizer, AutoModel
+from sklearn.decomposition import PCA
 
 # allowable node and edge features
 allowable_features = {
@@ -89,6 +92,10 @@ def mol_to_graph_data_obj_simple(smiles):
 
     return data
 
+def calculate_bounds(number):
+    lower_bound = math.floor(number * 2) / 2  # 下界
+    upper_bound = math.ceil(number * 2) / 2   # 上界
+    return lower_bound, upper_bound
 
 import pandas as pd
 import numpy as np
@@ -96,8 +103,9 @@ import os
 import csv
 import shutil
 
-data_path = "../../data/synergy_data/"
-dataset_name = "SynergyYN/"
+fetch_data_path = "../../data/synergy_data/"
+dataset_name = "ScaffoldHsa/"
+data_path = "/DATA/DATANAS1/xlx21/data/"
 
 if os.path.exists(data_path + dataset_name):
     shutil.rmtree(data_path + dataset_name)
@@ -108,55 +116,97 @@ empty_graph = Data(
     edge_attr=torch.empty(0, 0)  # 没有边特征
 )
 
-genes = pd.read_csv("../dicts/genes.txt", sep='\t')
+genes = pd.read_csv("../dicts/df_rma_landm.tsv", sep='\t')
+genes_pca = pd.read_csv("../dicts/df_rma_landm_pca2.tsv", sep='\t')
 
-def calculate_bounds(number):
-    lower_bound = math.floor(number * 2) / 2  # 下界
-    upper_bound = math.ceil(number * 2) / 2   # 上界
-    return lower_bound, upper_bound
+model_path = "../modelscope/ESM"
+
+device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+
+tokenizer = AutoTokenizer.from_pretrained(model_path)
+model = AutoModel.from_pretrained(model_path).to(device)
+
+uniprot_df = pd.read_csv(fetch_data_path + "uniprot_extracted.csv")
+name_to_seq = {name.lower(): seq for name, seq in zip(uniprot_df["name"], uniprot_df["sequence"])}
+
+def save_targets(targets, path):
+    if pd.isna(targets):  
+        torch.save(torch.empty(0), path)
+    else:
+        targets = [t.strip().lower() for t in targets.split(";")]
+        embeddings = []
+
+        for t in targets:
+            if t in name_to_seq:
+                seq = name_to_seq[t]
+                inputs = tokenizer(seq, return_tensors="pt", truncation=True, max_length=512).to(device)
+                with torch.no_grad():
+                    outputs = model(**inputs)
+                # 取 CLS token 表示
+                last_hidden_state = outputs.last_hidden_state[:, 0, :]  # shape: (1, 1280)
+                embeddings.append(last_hidden_state.cpu())
+
+        if embeddings:
+            tensor_out = torch.cat(embeddings, dim=0)  # shape: (n_targets, 1280)
+        else:
+            tensor_out = torch.empty(0)  # 如果没找到任何匹配的sequence
+
+        torch.save(tensor_out, path)
 
 def process(data, dir):
     i = 0
     for j in range(len(data)):
+        smiles1 = data[j][4].split(";")[1] if (";" in data[j][4]) else data[j][4]
+        smiles2 = data[j][5].split(";")[1] if (";" in data[j][5]) else data[j][5]
+        flag = True
         try:
-            graph1 = mol_to_graph_data_obj_simple(data[j][1])
+            graph1 = mol_to_graph_data_obj_simple(smiles1)
             data1 = {"Valid": True, "Graph": graph1, "Drug": data[j][0]}
         except Exception as e:
             print(f"Error occurred while processing {data[j][0]}:")
             print(str(e))
+            flag = False
             data1 = {"Valid": False, "Graph": empty_graph, "Drug": data[j][0]}
         try:
-            graph2 = mol_to_graph_data_obj_simple(data[j][3])
-            data2 = {"Valid": True, "Graph": graph2, "Drug": data[j][2]}
+            graph2 = mol_to_graph_data_obj_simple(smiles2)
+            data2 = {"Valid": True, "Graph": graph2, "Drug": data[j][1]}
         except Exception as e:
-            print(f"Error occurred while processing {data[j][2]}:")
+            print(f"Error occurred while processing {data[j][1]}:")
             print(str(e))
-            data2 = {"Valid": False, "Graph": empty_graph, "Drug": data[j][2]}
-        value = data[j][8]
-        os.makedirs(data_path + dataset_name + dir + "/graph1/" + str(i))
-        torch.save(data1, data_path + dataset_name + dir + "/graph1/" + str(i) + '/graph_data.pt')
-        os.makedirs(data_path + dataset_name + dir + "/graph2/" + str(i))
-        torch.save(data2, data_path + dataset_name + dir + "/graph2/" + str(i) + '/graph_data.pt')
+            flag = False
+            data2 = {"Valid": False, "Graph": empty_graph, "Drug": data[j][1]}
+        if not flag:
+            continue
         os.makedirs(data_path + dataset_name + dir + "/smiles1/" + str(i))
         os.makedirs(data_path + dataset_name + dir + "/smiles2/" + str(i))
         os.makedirs(data_path + dataset_name + dir + "/property1/" + str(i))
         os.makedirs(data_path + dataset_name + dir + "/property2/" + str(i))
         os.makedirs(data_path + dataset_name + dir + "/text/" + str(i))
-        cell_line = data[j][4]
-        tensor = torch.tensor(genes[cell_line].astype(float).values)
+        cell_line = data[j][3]
+        tensor = torch.tensor(genes['DATA.'+ str(cell_line)].astype(float).values)
         os.makedirs(data_path + dataset_name + dir + "/genes/" + str(i))
         torch.save(tensor, data_path + dataset_name + dir + "/genes/" + str(i) + '/gene_data.pt')
+        gene_2d = torch.tensor(genes_pca['DATA.'+ str(cell_line)].astype(float).values)
+        os.makedirs(data_path + dataset_name + dir + "/graph1/" + str(i))
+        transformed = copy.deepcopy(data1["Graph"])
+        transformed.x = torch.cat([gene_2d.repeat(data1["Graph"].num_nodes, 1), data1["Graph"].x], dim=1).to(torch.bfloat16)
+        data1["Transform"] = transformed
+        torch.save(data1, data_path + dataset_name + dir + "/graph1/" + str(i) + '/graph_data.pt')
+        os.makedirs(data_path + dataset_name + dir + "/graph2/" + str(i))
+        transformed = copy.deepcopy(data2["Graph"])
+        transformed.x = torch.cat([gene_2d.repeat(data2["Graph"].num_nodes, 1), data2["Graph"].x], dim=1).to(torch.bfloat16)
+        data2["Transform"] = transformed
+        torch.save(data2, data_path + dataset_name + dir + "/graph2/" + str(i) + '/graph_data.pt')
         print(i)
         file = open(data_path + dataset_name + dir + "/text/" + str(i) + "/text.txt","w")
+        value = data[j][9]
         lower, upper = calculate_bounds(value)
-        if value >= 0:
-            text = 'Yes.' # "The drugs have synergistic effects." #The absolute value is above "+ str(abs(lower))+" and below "+ str(abs(upper))+", thus the accurate value is "+ str('%.2f'%(abs(value))) + "."
+        if value > 0:
+            text = "Yes. The absolute value is above "+ str(abs(lower)) + " and below " + str(abs(upper)) +", thus the accurate value is "+ str('%.2f'%(abs(value))) + "."
         else:
-            text = 'No.' # "The drugs have antagonistic effects." # The absolute value is above "+ str(abs(lower))+" and below "+ str(abs(upper))+", thus the accurate value is "+ str('%.2f'%(abs(value))) + "."
+            text = "No. The absolute value is above "+ str(abs(upper)) +" and below "+ str(abs(lower)) +", thus the accurate value is "+ str('%.2f'%(abs(value))) + "."
         file.write(text)
         file.close()
-        smiles1 = data[j][1]
-        smiles2 = data[j][3]
         file = open(data_path + dataset_name + dir + "/smiles1/" + str(i) + "/text.txt","w")
         if pd.notna(smiles1) and smiles1 != "Not Available":
             if not data1["Valid"]:
@@ -173,7 +223,7 @@ def process(data, dir):
             if not data2["Valid"]:
                 print("ERROR!")
                 print(smiles2)
-                print(data[j][2]) 
+                print(data[j][1]) 
                 break
             file.write(smiles2)
         else:
@@ -181,31 +231,29 @@ def process(data, dir):
         file.close()
         file = open(data_path + dataset_name + dir + "/property1/" + str(i) + "/text.txt","w")
         property1 = "#Drug1 is " + data[j][0]
-        target1 = data[j][9]
-        if target1 is not None:
-            property1 += "[START_TARGET]" + target1[:128] + "[END_TARGET]"
         file.write(property1)
         file.close()
         file = open(data_path + dataset_name + dir + "/property2/" + str(i) + "/text.txt","w")
         property2 = "#Drug2 is " + data[j][2]
-        target2 = data[j][10]
-        if target2 is not None:
-            property2 += "[START_TARGET]" + target2[:128] + "[END_TARGET]"
         file.write(property2)
         file.close()
+        os.makedirs(data_path + dataset_name + dir + "/target1/" + str(i))
+        save_targets(data[j][6], os.path.join(data_path, dataset_name, dir, "target1", str(i), "target_data.pt"))
+        os.makedirs(data_path + dataset_name + dir + "/target2/" + str(i))
+        save_targets(data[j][7], os.path.join(data_path, dataset_name, dir, "target2", str(i), "target_data.pt"))
         i += 1
 
-train_data = pd.read_csv(data_path + 'all.csv')
+train_data = pd.read_csv(fetch_data_path + 'OOD_hsa/scaffold_train.csv')
 train_data = np.array(train_data)
 
 process(train_data, "train")
 
-valid_data = pd.read_csv(data_path + 'test.csv')
+valid_data = pd.read_csv(fetch_data_path + 'OOD_hsa/scaffold_valid.csv')
 valid_data = np.array(valid_data)
 
 process(valid_data, "valid")
 
-test_data = pd.read_csv(data_path + 'test.csv')
+test_data = pd.read_csv(fetch_data_path + 'OOD_hsa/scaffold_test.csv')
 test_data = np.array(test_data)
 
 process(test_data, "test")

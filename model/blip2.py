@@ -13,6 +13,7 @@ from transformers import BertTokenizer
 from model.gin import GNN
 from peft import LoraConfig, get_peft_model
 from model.nasmodel import GraceModel
+from model.disenmodel import DisenModel
     
 class Blip2Base(BaseModel):
     @classmethod
@@ -104,7 +105,27 @@ class Blip2Base(BaseModel):
         )
         ln_graph = LayerNorm(graph_encoder.supernet.hidden_size * (graph_encoder.supernet.num_layers + 1))
         return graph_encoder, ln_graph
-        
+
+    @classmethod
+    def init_disen_encoder(
+        cls,
+        input_dim,
+        env_dim,
+        mol=True,
+        virtual=True,
+        args=None,
+        use_forward=True,
+    ):
+        graph_encoder = DisenModel(
+            input_dim,
+            env_dim,
+            mol=mol,
+            virtual=virtual,
+            args=args,
+            use_forward=use_forward,
+        )
+        ln_graph = LayerNorm(graph_encoder.supernet.hidden_size * (graph_encoder.supernet.num_layers + 1))
+        return graph_encoder, ln_graph
 
     def load_from_pretrained(self, url_or_filename):
         if is_url(url_or_filename):

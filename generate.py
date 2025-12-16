@@ -191,7 +191,7 @@ def generate(data1, data2, smiles1, smiles2, property1, property2, genes, model,
     smiles_prompt2 = property2 + ("" if smiles2 is None else smiles_prompt2)
 
     cell_line_prompt = "The cell line of this drug pair is [START_CELL][END_CELL]. "
-    smiles_prompt = '</s> '+ cell_line_prompt + '< /s>' + smiles_prompt1 + ' </s>'+' </s>'+smiles_prompt2+' </s> .' + " " + "What is the Bliss synergy score between the two drugs?"
+    smiles_prompt = '</s> '+ cell_line_prompt + '< /s>' + smiles_prompt1 + ' </s>'+' </s>'+smiles_prompt2+' </s> .' + " " + "Do the two drugs exhibit synergy effects? What is their bliss synergy score?"
 
     collator = Collater([], [])
     graphs1 = {
@@ -220,9 +220,9 @@ def get_args():
     parser.add_argument('--cancer', type=bool, default=True)
     parser.add_argument('--NAS', type=bool, default=False)
     parser.add_argument('--cell', type=bool, default=True)
-    parser.add_argument('--cls', type=bool, default=False)
+    parser.add_argument('--string', type=bool, default=False)
     parser.add_argument('--category', type=int, default=-1)
-    parser.add_argument('--device', type=int, default=1)
+    parser.add_argument('--device', type=int, default=2)
     parser.add_argument('--llm_device', type=int, default=0)
     args = parser.parse_args()
     args.tune_gnn = True
@@ -232,15 +232,15 @@ def get_args():
 def main(args):
     device = f"cuda:{args.device}"
     model = MolTC(args)
-    ckpt = torch.load("all_checkpoints/ft_SynergyAbs/last.ckpt", map_location=device)
+    ckpt = torch.load("all_checkpoints/ft_SynergyCancerCombs/epoch=00.ckpt", map_location=device)
     model.load_state_dict(ckpt['state_dict'], strict=False)
     model = model.to(device)
 
     tokenizer = model.blip2opt.opt_tokenizer
 
-    df = pd.read_csv("/villa/xlx21/data/synergy_data/generated_dataset.csv")
+    df = pd.read_csv("./cancer_outputs/new_comb/drug_pairs_dedup.csv")
 
-    output_file = "/villa/xlx21/data/synergy_data/generated_results.json"
+    output_file = "./cancer_outputs/new_comb/results_new.txt"
 
     with open(output_file, "w") as f:
         for idx, row in tqdm(df.iterrows(), total=len(df)):

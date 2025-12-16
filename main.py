@@ -10,9 +10,10 @@ import pytorch_lightning as pl
 from pytorch_lightning import Trainer, strategies
 import pytorch_lightning.callbacks as plc
 from pytorch_lightning.loggers import CSVLogger
-from datamodule.modules import DataModuleCancer, DataModuleCellLine, DataModuleDDI, DataModuleSSI
+from datamodule.modules import DataModuleCancer, DataModuleCellLine, DataModuleDDI, DataModuleSSI, DataModuleTargetCellLine
 from model.moltc import MolTC
 from model.nasmodel import GraceModel
+from model.disenmodel import DisenModel
 
 os.environ['OPENBLAS_NUM_THREADS'] = '1'
 # Medium (bfloat16), High (tensorfloat32), Highest (float32)
@@ -45,7 +46,9 @@ def main(args):
         tokenizer = model.blip2opt.opt_tokenizer
     else:
         tokenizer = model.blip2opt.llm_tokenizer
-    if args.cell == True:
+    if args.cell and args.NAS:
+        dm = DataModuleTargetCellLine(args.mode, args.num_workers, args.batch_size, args.root, args.text_max_len, tokenizer, args)
+    elif args.cell == True:
         dm = DataModuleCellLine(args.mode, args.num_workers, args.batch_size, args.root, args.text_max_len, tokenizer, args)
     elif args.cancer == True:
         dm = DataModuleCancer(args.mode, args.num_workers, args.batch_size, args.root, args.text_max_len, tokenizer, args)
@@ -123,7 +126,6 @@ def get_args():
     parser.add_argument('--ckpt_path', type=str, default=None)
     parser = MolTC.add_model_specific_args(parser)
     parser = DataModuleDDI.add_model_specific_args(parser)
-    parser = GraceModel.add_model_specific_args(parser)
     parser.add_argument('--accelerator', type=str, default='gpu')
     parser.add_argument('--devices', type=str, default='1')
     parser.add_argument('--gpu', type=str, default='cpu')
@@ -133,16 +135,25 @@ def get_args():
     parser.add_argument('--check_val_every_n_epoch', type=int, default=1)
     parser.add_argument('--double', type=bool, default=False)
     parser.add_argument('--input_dim', type=int, default=2)
+    parser.add_argument('--env_dim', type=int, default=4)
     parser.add_argument('--valid_root', type=str, default='')
     parser.add_argument('--test_root', type=str, default='')
     parser.add_argument('--DDI', type=bool, default=False)
     parser.add_argument('--SSI', type=bool, default=False)
     parser.add_argument('--cancer', type=bool, default=False)
+    parser.add_argument('--string', type=bool, default=False)
     parser.add_argument('--cell', type=bool, default=False)
     parser.add_argument('--desc', type=bool, default=False)
     parser.add_argument('--question', type=str, default="What are the side effects of these two drugs?")
     parser.add_argument('--category', type=int, default=-1)
     parser.add_argument('--NAS', type=bool, default=False)
+    args = parser.parse_args()
+
+    if args.NAS and args.cell:
+        parser = DisenModel.add_model_specific_args(parser)
+    else:
+        parser = GraceModel.add_model_specific_args(parser)
+
     args = parser.parse_args()
 
     print("=========================================")

@@ -1,15 +1,16 @@
-from model.nas.gencoder import GEncoder
-from model.nas.archgen import AG
+import torch
+from model.nas.gencoder import RGEncoder, CrossAttention
+from model.nas.archgen import AG, InvDisenHead
 from model.nas.supernet import Network
 
 from autogllight.nas.space import BaseSpace
 from autogllight.nas.space.graces_space.genotypes import NA_PRIMITIVES, LA_PRIMITIVES, POOL_PRIMITIVES, READOUT_PRIMITIVES, ACT_PRIMITIVES
 
-# 用于 Graces 训练的模型
-class GraceModel(BaseSpace):
-    def __init__(self, input_dim, mol, virtual, args, use_forward):
+class DisenModel(BaseSpace):
+    def __init__(self, input_dim, env_dim, mol, virtual, args, use_forward):
         super().__init__()
         self.input_dim = input_dim
+        self.env_dim = env_dim
         self.mol = mol
         self.virtual = virtual
         self.args = args
@@ -17,7 +18,7 @@ class GraceModel(BaseSpace):
         self.build_graph()
 
     def build_graph(self):
-        self.supernet0 = GEncoder(
+        self.encoder = RGEncoder(
             in_dim=self.input_dim,
             hidden_size=self.args.graph_dim,
             num_layers=2,
@@ -28,34 +29,44 @@ class GraceModel(BaseSpace):
             mol=self.mol,
             virtual=self.virtual,
         )
+        self.cross_attn = CrossAttention(
+            drug_dim=self.args.graph_dim,
+            target_dim=self.args.target_dim,
+            hidden_dim=self.args.cross_attn_dim,
+        )
         self.supernet = Network(
-            in_dim=self.input_dim,
+            in_dim=self.env_dim,
             hidden_size=self.args.hidden_size,
             num_layers=self.args.num_layers,
             dropout=self.args.dropout,
             epsilon=self.args.epsilon,
             args=self.args,
             with_conv_linear=self.args.with_conv_linear,
-            mol=self.mol,
+            mol=False,  # with environmental data, not molecule
             virtual=self.virtual,
         )
         num_na_ops = len(NA_PRIMITIVES)
         num_pool_ops = len(POOL_PRIMITIVES)
         self.ag = AG(args=self.args, num_op=num_na_ops, num_pool=num_pool_ops)
+        self.invdisenhead = InvDisenHead(input_dim=self.args.graph_dim, invariant_dim=self.args.invariant_dim, variant_dim=self.args.variant_dim)
         self.explore_num = 0
 
-    def forward(self, data):
+    def forward(self, data, envdata, targets):
         if not self.use_forward:
             return self.prediction
-        # graph_emb [batch_size * 8]
+        # graph_emb0 [batch_size * 8]
         # sslout [batch_size * 3]
-        graph_emb0, sslout = self.supernet0(data, mode="mixed")
+        graph_emb0 = self.encoder(data, mode="mixed")
+        # graph_emb1 [batch_size * 8]
+        graph_emb1 = self.cross_attn(graph_emb0, targets)
+        # graph_emb1 [batch_size * 8]
+        graph_emb, disen_loss = self.invdisenhead(graph_emb0, graph_emb1)
         # graph_alpha [num_layers * batch_size * 6]，代表每层 6 个 options
-        graph_alpha, cosloss = self.ag(graph_emb0)
+        graph_alpha, cosloss = self.ag(graph_emb)
         # pred [batch_size * 1]
         # emb [batch_size * 128]
-        node_embs, node_mask = self.supernet(data, mode="mads", graph_alpha=graph_alpha)
-        return cosloss, sslout, node_embs, node_mask
+        node_embs, node_mask = self.supernet(envdata, mode="mads", graph_alpha=graph_alpha)
+        return disen_loss, cosloss, node_embs, node_mask
 
     def parse_model(self, selection):
         self.use_forward = False
@@ -139,10 +150,22 @@ class GraceModel(BaseSpace):
             "--hidden_size", type=int, default=128, help="default hidden_size in supernet"
         )
         parser.add_argument(
-            "--graph_dim", type=int, default=8, help="default hidden_size in supernet"
+            "--graph_dim", type=int, default=8, help="default dim in encoder"
         )
         parser.add_argument(
-            "--dropout", type=float, default=0.5, help="default hidden_size in supernet"
+            "--target_dim", type=int, default=1280, help="default dim for targets"
+        )
+        parser.add_argument(
+            "--cross_attn_dim", type=int, default=64, help="default dim for cross attention"
+        )
+        parser.add_argument(
+            "--invariant_dim", type=int, default=2, help="default dim for invariant representation"
+        )
+        parser.add_argument(
+            "--variant_dim", type=int, default=6, help="default dim for variant representation"
+        )
+        parser.add_argument(
+            "--dropout", type=float, default=0.5, help="default dropout in supernet"
         )
         # in the stage of update theta.
         parser.add_argument(
