@@ -34,14 +34,14 @@ class Blip2Base(BaseModel):
     def init_Qformer(cls, model_name, num_query_token, graph_width, cross_attention_freq=2):
         assert model_name == 'scibert'
         
-        encoder_config = BertConfig.from_pretrained('./bert_pretrained/')
+        encoder_config = BertConfig.from_pretrained('/DATA/DATANAS1/xlx21/bert_pretrained')
         encoder_config.encoder_width = graph_width
         encoder_config.add_cross_attention = True
         encoder_config.cross_attention_freq = cross_attention_freq
         encoder_config.query_length = num_query_token
         
         Qformer = BertLMHeadModel.from_pretrained(
-            "./bert_pretrained/", config=encoder_config
+            "/DATA/DATANAS1/xlx21/bert_pretrained", config=encoder_config
         )
 
         query_tokens = nn.Parameter(
