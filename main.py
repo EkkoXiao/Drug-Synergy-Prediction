@@ -92,28 +92,6 @@ def main(args):
         trainer.validate(model, datamodule=dm)
     elif args.mode == 'test':
         trainer.test(model, datamodule=dm)
-    elif args.mode == 'qa':
-        model.to(args.gpu)
-        if args.cancer:
-            prompt = "</s> #Drug1 is Amitriptyline. [START_PROPERTY]Amitriptyline is a tricyclic antidepressant indicated in the treatment of depressive illness, either endogenous or psychotic, and to relieve depression associated anxiety.[END_PROPERTY][START_TARGET]Sodium-dependent noradrenaline transporter,Sodium-dependent serotonin transporter,5-hydroxytryptamine receptor 2A,5-hydroxytrypt[END_TARGET]  </s> </s>#Drug2 is Minoxidil. [START_PROPERTY]Minoxidil is an antihypertensive vasodilating agent used for resistant hypertension that is symptomatic or has caused end organ damage.[END_PROPERTY][START_TARGET]ATP-sensitive inward rectifier potassium channel 1,Renin,Prostaglandin G/H synthase 1,UDP-glucuronosyltransferase 1-1[END_TARGET][START_SMILES]NC1=CC(=NC(N)=[N+]1[O-])N1CCCCC1[END_SMILES].  </s> . What are the side effects of these two drugs?"
-            output = model.blip2opt.cancer_qa({'prompts': [prompt]}, valid=[False, True], device=args.gpu, num_beams=1, output_scores=True)
-            print(output["scores"][0].shape)
-            logits = output["scores"][0][0]
-            probabilities = torch.nn.functional.softmax(logits, dim=-1)
-            top5_probabilities, top5_indices = torch.topk(probabilities, 5)
-            for i in range(5):
-                print(f"Top {i+1}: Index = {top5_indices[i].item()}, Probability = {top5_probabilities[i].item():.4f}")
-        else:
-            smiles1 = input("The SMILES sequence of the first drug: ")
-            smiles2 = input("The SMILES sequence of the second drug: ")
-            if args.DDI == True and args.SSI == False:
-                prompt_template = "</s> [START_I_SMILES]{smiles1}[END_I_SMILES]. </s> </s>[START_I_SMILES]{smiles2}[END_I_SMILES]. </s>. What are the side effects of these two drugs?"
-            elif args.SSI == True and args.DDI == False:
-                prompt_template = "</s> [START_I_SMILES]{smiles1}[END_I_SMILES]. </s> </s>[START_I_SMILES]{smiles2}[END_I_SMILES]. </s>. What is the solvation Gibbs free energy of this pair of molecules?"
-            prompt = prompt_template.format(smiles1=smiles1, smiles2=smiles2)
-
-            output = model.blip2opt.llm_qa({'prompts': [prompt]}, device="cuda" if torch.cuda.is_available() else "cpu")
-            print(output)
     else:
         raise NotImplementedError()
 
@@ -136,6 +114,7 @@ def get_args():
     parser.add_argument('--double', type=bool, default=False)
     parser.add_argument('--input_dim', type=int, default=2)
     parser.add_argument('--env_dim', type=int, default=4)
+    parser.add_argument('--train_root', type=str, default='')
     parser.add_argument('--valid_root', type=str, default='')
     parser.add_argument('--test_root', type=str, default='')
     parser.add_argument('--DDI', type=bool, default=False)

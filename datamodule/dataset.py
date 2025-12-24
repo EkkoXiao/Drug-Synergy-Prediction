@@ -36,9 +36,9 @@ class DegreeDistribution(object):
         return g
 
 class MoleculeDatasetSSI(Dataset):
-    def __init__(self, root, text_max_len, prompt=None, transform=None):
+    def __init__(self, root, text_max_len, prompt=None, transform=None, args=None):
         super(MoleculeDatasetSSI, self).__init__(root)
-        self.root = root
+        self.root = root if not args.mode == 'pretrain' else os.path.join(root, min(next(os.walk(root))[1])) + "/"
         self.text_max_len = text_max_len
         self.tokenizer = None
         self.transform = transform
@@ -120,9 +120,9 @@ class MoleculeDatasetSSI(Dataset):
         return sentence_token    
     
 class MoleculeDatasetDDI(Dataset):
-    def __init__(self, root, text_max_len, prompt=None, transform=None):
+    def __init__(self, root, text_max_len, prompt=None, transform=None, args=None):
         super(MoleculeDatasetDDI, self).__init__(root)
-        self.root = root
+        self.root = root if not args.mode == 'pretrain' else os.path.join(root, min(next(os.walk(root))[1])) + "/"
         self.text_max_len = text_max_len
         self.tokenizer = None
         self.transform = transform
@@ -208,9 +208,9 @@ class MoleculeDatasetDDI(Dataset):
         return sentence_token
     
 class MoleculeDatasetCancer(Dataset):
-    def __init__(self, root, text_max_len, prompt=None, transform=None, desc=False, question="What are the side effects of these two drugs?"):
+    def __init__(self, root, text_max_len, prompt=None, transform=None, desc=False, question="What are the side effects of these two drugs?", args=None):
         super(MoleculeDatasetCancer, self).__init__(root)
-        self.root = root
+        self.root = root if not args.mode == 'pretrain' else os.path.join(root, min(next(os.walk(root))[1])) + "/"
         self.text_max_len = text_max_len
         self.tokenizer = None
         self.transform = transform
@@ -325,9 +325,9 @@ class MoleculeDatasetCancer(Dataset):
     
 
 class MoleculeDatasetCellLine(Dataset):
-    def __init__(self, root, text_max_len, prompt=None, transform=None, desc=False, question="What are the side effects of these two drugs?"):
+    def __init__(self, root, text_max_len, prompt=None, transform=None, desc=False, question="What are the side effects of these two drugs?", args=None):
         super(MoleculeDatasetCellLine, self).__init__(root)
-        self.root = root
+        self.root = root if not args.mode == 'pretrain' else os.path.join(root, min(next(os.walk(root))[1])) + "/"
         self.text_max_len = text_max_len
         self.tokenizer = None
         self.transform = transform
@@ -448,9 +448,9 @@ class MoleculeDatasetCellLine(Dataset):
     
 
 class MoleculeDatasetTargetCellLine(Dataset):
-    def __init__(self, root, text_max_len, prompt=None, transform=None, desc=False, question="What are the side effects of these two drugs?"):
+    def __init__(self, root, text_max_len, prompt=None, transform=None, desc=False, question="What are the side effects of these two drugs?", args=None):
         super(MoleculeDatasetTargetCellLine, self).__init__(root)
-        self.root = root
+        self.root = root if not args.mode == 'pretrain' else os.path.join(root, min(next(os.walk(root))[1])) + "/"
         self.text_max_len = text_max_len
         self.tokenizer = None
         self.transform = transform

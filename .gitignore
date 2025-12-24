@@ -24,3 +24,6 @@ AutoGL.md
 *.txt
 *.ipynb
 !bliss.sh
+!hsa.sh
+!loewe.sh
+!zip.sh

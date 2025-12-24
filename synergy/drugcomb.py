@@ -104,7 +104,7 @@ import csv
 import shutil
 
 fetch_data_path = "../../data/synergy_data/"
-dataset_name = "ScaffoldHsa/"
+dataset_name = "ScaffoldLoewe/"
 data_path = "/DATA/DATANAS1/xlx21/data/"
 
 if os.path.exists(data_path + dataset_name):
@@ -121,7 +121,7 @@ genes_pca = pd.read_csv("../dicts/df_rma_landm_pca2.tsv", sep='\t')
 
 model_path = "../modelscope/ESM"
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda:4" if torch.cuda.is_available() else "cpu")
 
 tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModel.from_pretrained(model_path).to(device)
@@ -243,17 +243,17 @@ def process(data, dir):
         save_targets(data[j][7], os.path.join(data_path, dataset_name, dir, "target2", str(i), "target_data.pt"))
         i += 1
 
-train_data = pd.read_csv(fetch_data_path + 'OOD_hsa/scaffold_train.csv')
+train_data = pd.read_csv(fetch_data_path + 'OOD_loewe/scaffold_train.csv')
 train_data = np.array(train_data)
 
 process(train_data, "train")
 
-valid_data = pd.read_csv(fetch_data_path + 'OOD_hsa/scaffold_valid.csv')
+valid_data = pd.read_csv(fetch_data_path + 'OOD_loewe/scaffold_valid.csv')
 valid_data = np.array(valid_data)
 
 process(valid_data, "valid")
 
-test_data = pd.read_csv(fetch_data_path + 'OOD_hsa/scaffold_test.csv')
+test_data = pd.read_csv(fetch_data_path + 'OOD_loewe/scaffold_test.csv')
 test_data = np.array(test_data)
 
 process(test_data, "test")
