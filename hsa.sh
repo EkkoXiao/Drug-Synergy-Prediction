@@ -9,7 +9,7 @@ python main.py \
     --devices '0,1,2,3' \
     --mode 'pretrain' \
     --filename "ft_SynergyScaffoldHsa" \
-    --opt_model 'modelscope/galactica-1.3b' \
+    --opt_model '/DATA/DATANAS1/xlx21/modelscope/galactica-1.3b' \
     --tune_gnn \
     --prompt '[START_SMILES]{}[END_SMILES]. ' \
     --inference_batch_size 4 \

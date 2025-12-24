@@ -913,10 +913,10 @@ class DataModuleTargetCellLine(LightningDataModule):
         self.num_workers = num_workers
         self.text_max_len = text_max_len
         self.prompt = args.prompt
-        self.pretrain_dataset =  MoleculeDatasetTargetCellLine(root, text_max_len, self.prompt, desc=self.args.desc, question=self.args.question, args=args)
-        self.train_dataset =  MoleculeDatasetTargetCellLine(self.args.train_root, text_max_len, self.prompt, desc=self.args.desc, question=self.args.question, args=args)
-        self.val_dataset =  MoleculeDatasetTargetCellLine(self.args.valid_root, text_max_len, self.prompt, desc=self.args.desc, question=self.args.question, args=args)
-        self.test_dataset = MoleculeDatasetTargetCellLine(self.args.test_root, text_max_len, self.prompt, desc=self.args.desc, question=self.args.question, args=args)
+        self.pretrain_dataset =  MoleculeDatasetTargetCellLine(root, text_max_len, self.prompt, desc=self.args.desc, question=self.args.question, pretrain=True)
+        self.train_dataset =  MoleculeDatasetTargetCellLine(self.args.train_root, text_max_len, self.prompt, desc=self.args.desc, question=self.args.question, pretrain=False)
+        self.val_dataset =  MoleculeDatasetTargetCellLine(self.args.valid_root, text_max_len, self.prompt, desc=self.args.desc, question=self.args.question, pretrain=False)
+        self.test_dataset = MoleculeDatasetTargetCellLine(self.args.test_root, text_max_len, self.prompt, desc=self.args.desc, question=self.args.question, pretrain=False)
         self.init_tokenizer(tokenizer)
         self.mol_ph_token = '<mol>' * self.args.num_query_token
         self.cell_ph_token = '<cell>' * self.args.num_query_token
